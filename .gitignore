@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+
+# Kaggle credentials
+kaggle.json
+
+# Downloaded dataset / cache
+.cache/
+data/
