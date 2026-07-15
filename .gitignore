@@ -21,5 +21,6 @@ kaggle.json
 
 # Downloaded dataset / cache
 .cache/
-data/
+data/*
 !data/manifest.csv
+!data/label_map.json
