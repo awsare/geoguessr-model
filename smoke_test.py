@@ -16,7 +16,8 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from dataset import GeoLocateDataset, MANIFEST_PATH
-from train import Net, evaluate_overall, evaluate_per_class, get_device, train
+from evaluate import evaluate_overall, evaluate_per_class
+from train import Net, get_device, train
 
 SAMPLE_SIZE = 32
 BATCH_SIZE = 8

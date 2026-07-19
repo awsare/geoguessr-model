@@ -17,13 +17,14 @@ pip install -r requirements.txt
 python download_dataset.py   # download the dataset via kagglehub
 python prepare_dataset.py    # build data/manifest.csv
 python dataset.py            # sanity-check the PyTorch Dataset/DataLoader
-python train.py              # train the CNN
+python train.py              # train the CNN and save a checkpoint
+python evaluate.py           # load the checkpoint and report test accuracy
 python smoke_test.py         # quick end-to-end pipeline check on tiny data slices
 ```
 
 ## Data flow
 
-`download_dataset.py` → `prepare_dataset.py` (using `sectors.py`) → `data/manifest.csv` → `dataset.py` → `train.py` → `checkpoints/geolocate_net.pth`
+`download_dataset.py` → `prepare_dataset.py` (using `sectors.py`) → `data/manifest.csv` → `dataset.py` → `train.py` → `checkpoints/geolocate_net.pth` → `evaluate.py`
 
 ## Files
 
@@ -49,8 +50,10 @@ python smoke_test.py         # quick end-to-end pipeline check on tiny data slic
   `data/label_map.json`.
 
 - **`train.py`** — Trains a from-scratch CNN (`Net`) with `CrossEntropyLoss`
-  + SGD, saves `checkpoints/geolocate_net.pth`, and reports overall +
-  per-sector test accuracy.
+  + SGD and saves `checkpoints/geolocate_net.pth`.
+
+- **`evaluate.py`** — Loads `checkpoints/geolocate_net.pth` and reports
+  overall and per-sector test accuracy for the test split.
 
 - **`smoke_test.py`** — Exercises the full pipeline (dataset → model →
   training step → checkpoint → eval) on a tiny data slice, to catch

@@ -2,8 +2,8 @@
 Trains a CNN to classify GeoLocate images by country, following the
 structure of PyTorch's "Training a Classifier" tutorial
 (docs.pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html): a
-from-scratch conv net, CrossEntropyLoss + SGD, a plain training loop with
-running-loss prints, and overall + per-class test accuracy.
+from-scratch conv net, CrossEntropyLoss + SGD, and a plain training loop
+with running-loss prints.
 
 Usage:
     python train.py
@@ -92,50 +92,12 @@ def train(net, trainloader, device):
     print("Finished Training")
 
 
-def evaluate_overall(net, testloader, device):
-    """Print overall accuracy of net on testloader."""
-    correct, total = 0, 0
-    with torch.no_grad():
-        for data in testloader:
-            images, labels = data[0].to(device), data[1].to(device)
-            outputs = net(images)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-
-    print(f"Accuracy on test images: {100 * correct / total:.1f} %")
-
-
-def evaluate_per_class(net, testloader, label_map, device):
-    """Print per-sector accuracy of net on testloader."""
-    idx_to_sector = {idx: sector for sector, idx in label_map.items()}
-    correct_pred = {sector: 0 for sector in label_map}
-    total_pred = {sector: 0 for sector in label_map}
-
-    with torch.no_grad():
-        for data in testloader:
-            images, labels = data[0].to(device), data[1].to(device)
-            outputs = net(images)
-            _, predictions = torch.max(outputs, 1)
-            for label, prediction in zip(labels, predictions):
-                sector = idx_to_sector[label.item()]
-                if label == prediction:
-                    correct_pred[sector] += 1
-                total_pred[sector] += 1
-
-    for sector, correct_count in sorted(correct_pred.items()):
-        accuracy = 100 * correct_count / total_pred[sector] if total_pred[sector] else 0
-        print(f"Accuracy for {sector:26s}: {accuracy:.1f} %")
-
-
 def main():
     device = get_device()
     print(f"Using device: {device}")
 
     train_dataset = GeoLocateDataset("train")
-    test_dataset = GeoLocateDataset("test")
     trainloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    testloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     num_classes = len(train_dataset.label_map)
     net = Net(num_classes).to(device)
@@ -145,9 +107,6 @@ def main():
     os.makedirs(os.path.dirname(CHECKPOINT_PATH), exist_ok=True)
     torch.save(net.state_dict(), CHECKPOINT_PATH)
     print(f"Model saved to {CHECKPOINT_PATH}")
-
-    evaluate_overall(net, testloader, device)
-    evaluate_per_class(net, testloader, train_dataset.label_map, device)
 
 
 if __name__ == "__main__":
