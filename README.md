@@ -17,14 +17,14 @@ pip install -r requirements.txt
 python download_dataset.py   # download the dataset via kagglehub
 python prepare_dataset.py    # build data/manifest.csv
 python dataset.py            # sanity-check the PyTorch Dataset/DataLoader
-python train.py              # train the CNN and save a checkpoint
+python train.py              # train the ResNet model and save a checkpoint
 python evaluate.py           # load the checkpoint and report test accuracy
 python smoke_test.py         # quick end-to-end pipeline check on tiny data slices
 ```
 
 ## Data flow
 
-`download_dataset.py` → `prepare_dataset.py` (using `sectors.py`) → `data/manifest.csv` → `dataset.py` → `train.py` → `checkpoints/geolocate_net.pth` → `evaluate.py`
+`download_dataset.py` → `prepare_dataset.py` (using `sectors.py`) → `data/manifest.csv` → `dataset.py` → `model.py` → `train.py` → `checkpoints/geolocate_net.pth` → `evaluate.py`
 
 ## Files
 
@@ -49,8 +49,11 @@ python smoke_test.py         # quick end-to-end pipeline check on tiny data slic
   normalization). Sector labels are encoded via a mapping persisted to
   `data/label_map.json`.
 
-- **`train.py`** — Trains a from-scratch CNN (`Net`) with `CrossEntropyLoss`
-  + SGD and saves `checkpoints/geolocate_net.pth`.
+- **`model.py`** — Defines `Net`, a ResNet-18 backbone with a classifier
+  head sized to the active sector count.
+
+- **`train.py`** — Trains a `ResNet-18` classifier (`Net`) with
+  `CrossEntropyLoss` + SGD and saves `checkpoints/geolocate_net.pth`.
 
 - **`evaluate.py`** — Loads `checkpoints/geolocate_net.pth` and reports
   overall and per-sector test accuracy for the test split.
