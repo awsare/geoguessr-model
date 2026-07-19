@@ -1,7 +1,8 @@
 """
 Trains a ResNet-18 classifier for GeoLocate sector prediction using
-CrossEntropyLoss + SGD and a plain training loop with running-loss
-prints.
+a two-phase fine-tuning schedule:
+1) train classifier head with frozen backbone,
+2) unfreeze full network and fine-tune end-to-end.
 
 Usage:
     python train.py
@@ -24,8 +25,12 @@ from prepare_dataset import MANIFEST_PATH
 CHECKPOINT_PATH = os.path.join("checkpoints", "geolocate_net.pth")
 BATCH_SIZE = 32
 NUM_EPOCHS = 10
-LEARNING_RATE = 0.001
+HEAD_WARMUP_EPOCHS = 3
+HEAD_LEARNING_RATE = 0.001
+BACKBONE_LEARNING_RATE = 0.0001
+FINETUNE_HEAD_LEARNING_RATE = 0.0005
 MOMENTUM = 0.9
+WEIGHT_DECAY = 1e-4
 PRINT_EVERY = 100
 
 
@@ -38,14 +43,9 @@ def get_device():
     return torch.device("cpu")
 
 
-def train(net, trainloader, device):
-    """Train net for NUM_EPOCHS, printing running loss every PRINT_EVERY
-    mini-batches, following the tutorial's training loop.
-    """
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(net.parameters(), lr=LEARNING_RATE, momentum=MOMENTUM)
-
-    for epoch in range(NUM_EPOCHS):
+def run_training_epochs(net, trainloader, device, optimizer, criterion, num_epochs, epoch_offset=0):
+    """Run one training phase for num_epochs."""
+    for phase_epoch in range(num_epochs):
         running_loss = 0.0
         for i, data in enumerate(trainloader, 0):
             inputs, labels = data[0].to(device), data[1].to(device)
@@ -58,8 +58,55 @@ def train(net, trainloader, device):
 
             running_loss += loss.item()
             if i % PRINT_EVERY == PRINT_EVERY - 1:
-                print(f"[{epoch + 1}, {i + 1:5d}] loss: {running_loss / PRINT_EVERY:.3f}")
+                print(
+                    f"[{epoch_offset + phase_epoch + 1}, {i + 1:5d}] "
+                    f"loss: {running_loss / PRINT_EVERY:.3f}"
+                )
                 running_loss = 0.0
+
+
+def train(net, trainloader, device):
+    """Train net with head warmup then full-network fine-tuning."""
+    criterion = nn.CrossEntropyLoss()
+
+    head_epochs = min(HEAD_WARMUP_EPOCHS, NUM_EPOCHS)
+    finetune_epochs = max(NUM_EPOCHS - head_epochs, 0)
+
+    print(f"Phase 1/2: train classifier head for {head_epochs} epoch(s)")
+    net.freeze_backbone()
+    head_optimizer = optim.SGD(
+        net.backbone.fc.parameters(),
+        lr=HEAD_LEARNING_RATE,
+        momentum=MOMENTUM,
+        weight_decay=WEIGHT_DECAY,
+    )
+    run_training_epochs(net, trainloader, device, head_optimizer, criterion, head_epochs)
+
+    if finetune_epochs > 0:
+        print(f"Phase 2/2: fine-tune full network for {finetune_epochs} epoch(s)")
+        net.unfreeze_backbone()
+        backbone_params = [
+            param
+            for name, param in net.backbone.named_parameters()
+            if not name.startswith("fc.")
+        ]
+        finetune_optimizer = optim.SGD(
+            [
+                {"params": backbone_params, "lr": BACKBONE_LEARNING_RATE},
+                {"params": net.backbone.fc.parameters(), "lr": FINETUNE_HEAD_LEARNING_RATE},
+            ],
+            momentum=MOMENTUM,
+            weight_decay=WEIGHT_DECAY,
+        )
+        run_training_epochs(
+            net,
+            trainloader,
+            device,
+            finetune_optimizer,
+            criterion,
+            finetune_epochs,
+            epoch_offset=head_epochs,
+        )
 
     print("Finished Training")
 
@@ -86,7 +133,7 @@ def main():
             "Training requires at least 2 classes. "
             "Adjust sectoring/filtering and rebuild the manifest."
         )
-    net = Net(num_classes).to(device)
+    net = Net(num_classes, pretrained=True).to(device)
 
     train(net, trainloader, device)
 

@@ -50,10 +50,14 @@ python smoke_test.py         # quick end-to-end pipeline check on tiny data slic
   `data/label_map.json`.
 
 - **`model.py`** — Defines `Net`, a ResNet-18 backbone with a classifier
-  head sized to the active sector count.
+  head sized to the active sector count. Uses ImageNet pretrained weights
+  by default, with a fallback to random initialization if weights cannot be
+  loaded.
 
-- **`train.py`** — Trains a `ResNet-18` classifier (`Net`) with
-  `CrossEntropyLoss` + SGD and saves `checkpoints/geolocate_net.pth`.
+- **`train.py`** — Trains `Net` with a two-phase schedule:
+  phase 1 trains only the classifier head (frozen backbone), then phase 2
+  fine-tunes the full network with a lower LR on the backbone and higher LR
+  on the classifier head. Saves `checkpoints/geolocate_net.pth`.
 
 - **`evaluate.py`** — Loads `checkpoints/geolocate_net.pth` and reports
   overall and per-sector test accuracy for the test split.
@@ -68,3 +72,36 @@ python smoke_test.py         # quick end-to-end pipeline check on tiny data slic
 - **`data/`** — Gitignored except for `data/label_map.json`. The generated
   `manifest.csv` stays local because it contains machine-specific kagglehub
   cache paths. Images stay in the kagglehub cache, not in this repo.
+
+## Decisions
+
+This section tracks intentional project choices and why they were made.
+
+- **Prediction target is sector, not country**
+  The model predicts a geographic sector (from `sectors.py`) rather than a
+  specific country. This reduces label sparsity and keeps low-image countries
+  usable by grouping them with nearby countries.
+
+- **Filter sectors with very low support**
+  `prepare_dataset.py` drops sectors with fewer than
+  `MIN_IMAGES_PER_SECTOR` images. This avoids training classes with almost no
+  signal, which would otherwise add noise and unstable metrics.
+
+- **Split strategy is sector-stratified train/val/test**
+  Splits are assigned within each sector (`SPLIT_RATIOS = 0.8/0.1/0.1`) so
+  minority sectors still appear in val/test and evaluation remains meaningful
+  across classes.
+
+- **Manifest references cached dataset paths**
+  `data/manifest.csv` stores filepaths into the local kagglehub cache instead
+  of copying images into the repo. This avoids duplicating ~50k images, at the
+  cost of needing per-machine manifest regeneration.
+
+- **Model initialization is pretrained ResNet-18**
+  The backbone starts from ImageNet features (default), which improves data
+  efficiency versus training from scratch and helps minority sectors.
+
+- **Training uses a two-phase fine-tuning schedule**
+  Phase 1 trains only the classifier head, then phase 2 unfreezes the
+  backbone for end-to-end fine-tuning with differential learning rates. This
+  stabilizes optimization after swapping the classifier head.
