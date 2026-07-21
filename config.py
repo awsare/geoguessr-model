@@ -102,6 +102,17 @@ WEIGHT_DECAY = 1e-4
 # Interval (in mini-batches) for printing running loss.
 PRINT_EVERY = 100
 
+# Enable OneCycleLR scheduling (applied separately per training phase).
+USE_ONE_CYCLE_LR = True
+
+# OneCycleLR shape controls.
+# Fraction of total steps used to increase LR from initial_lr to max_lr.
+ONE_CYCLE_PCT_START = 0.3
+# initial_lr = max_lr / ONE_CYCLE_DIV_FACTOR
+ONE_CYCLE_DIV_FACTOR = 25.0
+# final_lr = initial_lr / ONE_CYCLE_FINAL_DIV_FACTOR
+ONE_CYCLE_FINAL_DIV_FACTOR = 10000.0
+
 # Validation metric used to select the best checkpoint.
 # Supported values: "overall_accuracy", "macro_accuracy".
 # overall_accuracy = total correct / total samples (dominated by large classes).
@@ -116,6 +127,9 @@ BEST_CHECKPOINT_METRIC = "macro_accuracy"
 
 # Whether to use inverse-frequency class weights in CrossEntropyLoss.
 USE_CLASS_WEIGHTS = True
+
+# Label smoothing applied to CrossEntropyLoss targets.
+LABEL_SMOOTHING = 0.05
 
 # Whether to oversample minority classes via WeightedRandomSampler.
 USE_WEIGHTED_SAMPLER = False

@@ -30,10 +30,15 @@ from config import (
     MANIFEST_PATH,
     MOMENTUM,
     NUM_EPOCHS,
+    ONE_CYCLE_DIV_FACTOR,
+    ONE_CYCLE_FINAL_DIV_FACTOR,
+    ONE_CYCLE_PCT_START,
     PRINT_EVERY,
     TRAIN_NUM_WORKERS,
+    USE_ONE_CYCLE_LR,
     USE_CLASS_WEIGHTS,
     USE_WEIGHTED_SAMPLER,
+    LABEL_SMOOTHING,
     WEIGHT_DECAY,
 )
 from dataset import GeoLocateDataset
@@ -126,9 +131,14 @@ def run_training_epochs(
     num_epochs,
     epoch_offset=0,
     epoch_end_callback=None,
+    scheduler=None,
 ):
     """Run one training phase for num_epochs."""
     for phase_epoch in range(num_epochs):
+        epoch_number = epoch_offset + phase_epoch + 1
+        current_lrs = ", ".join(f"{group['lr']:.6g}" for group in optimizer.param_groups)
+        print(f"[epoch {epoch_number:02d}] lr={current_lrs}")
+
         net.train()
         running_loss = 0.0
         for i, data in enumerate(trainloader, 0):
@@ -139,17 +149,19 @@ def run_training_epochs(
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
 
             running_loss += loss.item()
             if i % PRINT_EVERY == PRINT_EVERY - 1:
                 print(
-                    f"[{epoch_offset + phase_epoch + 1}, {i + 1:5d}] "
+                    f"[{epoch_number}, {i + 1:5d}] "
                     f"loss: {running_loss / PRINT_EVERY:.3f}"
                 )
                 running_loss = 0.0
 
         if epoch_end_callback is not None:
-            epoch_end_callback(epoch_offset + phase_epoch + 1)
+            epoch_end_callback(epoch_number)
 
 
 def train(net, trainloader, valloader, device, criterion, best_checkpoint_path, num_classes):
@@ -200,6 +212,21 @@ def train(net, trainloader, valloader, device, criterion, best_checkpoint_path, 
         momentum=MOMENTUM,
         weight_decay=WEIGHT_DECAY,
     )
+    head_scheduler = None
+    if USE_ONE_CYCLE_LR:
+        steps_per_epoch = len(trainloader)
+        if steps_per_epoch == 0:
+            raise RuntimeError("Train dataloader has zero batches; cannot build OneCycleLR.")
+        head_scheduler = optim.lr_scheduler.OneCycleLR(
+            head_optimizer,
+            max_lr=HEAD_LEARNING_RATE,
+            epochs=head_epochs,
+            steps_per_epoch=steps_per_epoch,
+            pct_start=ONE_CYCLE_PCT_START,
+            div_factor=ONE_CYCLE_DIV_FACTOR,
+            final_div_factor=ONE_CYCLE_FINAL_DIV_FACTOR,
+        )
+
     run_training_epochs(
         net,
         trainloader,
@@ -208,6 +235,7 @@ def train(net, trainloader, valloader, device, criterion, best_checkpoint_path, 
         criterion,
         head_epochs,
         epoch_end_callback=on_epoch_end,
+        scheduler=head_scheduler,
     )
 
     if finetune_epochs > 0:
@@ -226,6 +254,23 @@ def train(net, trainloader, valloader, device, criterion, best_checkpoint_path, 
             momentum=MOMENTUM,
             weight_decay=WEIGHT_DECAY,
         )
+        finetune_scheduler = None
+        if USE_ONE_CYCLE_LR:
+            steps_per_epoch = len(trainloader)
+            if steps_per_epoch == 0:
+                raise RuntimeError(
+                    "Train dataloader has zero batches; cannot build OneCycleLR."
+                )
+            finetune_scheduler = optim.lr_scheduler.OneCycleLR(
+                finetune_optimizer,
+                max_lr=[BACKBONE_LEARNING_RATE, FINETUNE_HEAD_LEARNING_RATE],
+                epochs=finetune_epochs,
+                steps_per_epoch=steps_per_epoch,
+                pct_start=ONE_CYCLE_PCT_START,
+                div_factor=ONE_CYCLE_DIV_FACTOR,
+                final_div_factor=ONE_CYCLE_FINAL_DIV_FACTOR,
+            )
+
         run_training_epochs(
             net,
             trainloader,
@@ -235,6 +280,7 @@ def train(net, trainloader, valloader, device, criterion, best_checkpoint_path, 
             finetune_epochs,
             epoch_offset=head_epochs,
             epoch_end_callback=on_epoch_end,
+            scheduler=finetune_scheduler,
         )
 
     print("Finished Training")
@@ -267,7 +313,13 @@ def main():
     print(
         "Balancing config: "
         f"USE_CLASS_WEIGHTS={USE_CLASS_WEIGHTS}, "
-        f"USE_WEIGHTED_SAMPLER={USE_WEIGHTED_SAMPLER}"
+        f"USE_WEIGHTED_SAMPLER={USE_WEIGHTED_SAMPLER}, "
+        f"LABEL_SMOOTHING={LABEL_SMOOTHING}"
+    )
+    print(
+        "LR config: "
+        f"USE_ONE_CYCLE_LR={USE_ONE_CYCLE_LR}, "
+        f"ONE_CYCLE_PCT_START={ONE_CYCLE_PCT_START}"
     )
 
     sampler = build_weighted_sampler(train_dataset, class_counts) if USE_WEIGHTED_SAMPLER else None
@@ -304,9 +356,12 @@ def main():
         )
 
     if USE_CLASS_WEIGHTS:
-        criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
+        criterion = nn.CrossEntropyLoss(
+            weight=class_weights.to(device),
+            label_smoothing=LABEL_SMOOTHING,
+        )
     else:
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
 
     net = Net(num_classes, pretrained=True).to(device)
 

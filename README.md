@@ -74,7 +74,8 @@ Config for each stage is sourced from `config.py`.
   fine-tunes the full network with a lower LR on the backbone and higher LR
   on the classifier head. Includes class-balancing options via weighted
   cross-entropy (`USE_CLASS_WEIGHTS`) and optional minority oversampling
-  (`USE_WEIGHTED_SAMPLER`). Selects the best checkpoint by validation metric
+  (`USE_WEIGHTED_SAMPLER`). Supports optional OneCycle learning-rate scheduling
+  (`USE_ONE_CYCLE_LR`) for both training phases. Selects the best checkpoint by validation metric
   each epoch (`BEST_CHECKPOINT_METRIC`) and writes it to
   `checkpoints/geolocate_net.pth`.
 
