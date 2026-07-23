@@ -128,3 +128,10 @@ This section tracks intentional project choices and why they were made.
   (`USE_CLASS_WEIGHTS` in `config.py`). Optional `WeightedRandomSampler`
   (`USE_WEIGHTED_SAMPLER` in `config.py`) can further increase minority
   exposure during training when rare sectors underperform.
+
+- **Optional distance-aware training term can improve geographic error**
+  Training can optionally add a centroid-distance penalty to cross-entropy:
+  `total_loss = CE + DISTANCE_LOSS_WEIGHT * distance_penalty`.
+  This is controlled by `USE_DISTANCE_LOSS`, `DISTANCE_LOSS_WEIGHT`, and
+  `DISTANCE_LOSS_TAU_KM` in `config.py`. The penalty is designed to reduce
+  geographically severe mistakes while preserving sector classification.

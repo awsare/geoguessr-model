@@ -12,9 +12,11 @@ Requirements:
 """
 
 import os
+import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
@@ -39,10 +41,14 @@ from config import (
     USE_CLASS_WEIGHTS,
     USE_WEIGHTED_SAMPLER,
     LABEL_SMOOTHING,
+    DISTANCE_LOSS_TAU_KM,
+    DISTANCE_LOSS_WEIGHT,
     WEIGHT_DECAY,
+    USE_DISTANCE_LOSS,
 )
 from dataset import GeoLocateDataset
 from model import Net
+from sectors import get_active_sector_centroids
 
 
 def get_device():
@@ -85,6 +91,93 @@ def build_weighted_sampler(dataset, class_counts):
         num_samples=len(sample_weights),
         replacement=True,
     )
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    """Return great-circle distance in kilometers between two lat/lon points."""
+    earth_radius_km = 6371.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lambda = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(d_phi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return earth_radius_km * c
+
+
+def build_sector_distance_matrix_km(label_map):
+    """Return [num_classes, num_classes] centroid distance matrix in km."""
+    idx_to_sector = {idx: sector for sector, idx in label_map.items()}
+    centroid_map = get_active_sector_centroids()
+    missing = sorted(set(idx_to_sector.values()) - set(centroid_map))
+    if missing:
+        missing_names = ", ".join(missing)
+        raise RuntimeError(
+            "Missing centroid coordinates for sector(s): "
+            f"{missing_names}. Update centroid maps in sectors.py."
+        )
+
+    num_classes = len(label_map)
+    distances = torch.zeros((num_classes, num_classes), dtype=torch.float32)
+    for i in range(num_classes):
+        sector_i = idx_to_sector[i]
+        lat_i, lon_i = centroid_map[sector_i]
+        for j in range(num_classes):
+            sector_j = idx_to_sector[j]
+            lat_j, lon_j = centroid_map[sector_j]
+            distances[i, j] = haversine_km(lat_i, lon_i, lat_j, lon_j)
+    return distances
+
+
+class DistanceAwareCrossEntropyLoss(nn.Module):
+    """Cross-entropy with optional distance-aware regularization term."""
+
+    def __init__(
+        self,
+        class_weights=None,
+        label_smoothing=0.0,
+        distance_matrix_km=None,
+        distance_weight=0.0,
+        distance_tau_km=1500.0,
+    ):
+        super().__init__()
+        if class_weights is not None:
+            self.register_buffer("class_weights", class_weights)
+        else:
+            self.class_weights = None
+
+        if distance_matrix_km is not None:
+            self.register_buffer("distance_matrix_km", distance_matrix_km)
+        else:
+            self.distance_matrix_km = None
+
+        self.label_smoothing = label_smoothing
+        self.distance_weight = float(distance_weight)
+        self.distance_tau_km = float(distance_tau_km)
+        if self.distance_tau_km <= 0:
+            raise ValueError("DISTANCE_LOSS_TAU_KM must be > 0.")
+
+    def forward(self, logits, labels):
+        ce_loss = F.cross_entropy(
+            logits,
+            labels,
+            weight=self.class_weights,
+            label_smoothing=self.label_smoothing,
+        )
+
+        if self.distance_weight <= 0 or self.distance_matrix_km is None:
+            return ce_loss
+
+        probs = torch.softmax(logits, dim=1)
+        # Gather the distance row for each true label: [batch, num_classes].
+        true_to_all_distances = self.distance_matrix_km[labels]
+        expected_distance_km = (probs * true_to_all_distances).sum(dim=1)
+        distance_penalty = (1.0 - torch.exp(-expected_distance_km / self.distance_tau_km)).mean()
+        return ce_loss + self.distance_weight * distance_penalty
 
 
 def evaluate_accuracy(net, dataloader, device, num_classes):
@@ -317,6 +410,12 @@ def main():
         f"LABEL_SMOOTHING={LABEL_SMOOTHING}"
     )
     print(
+        "Distance-loss config: "
+        f"USE_DISTANCE_LOSS={USE_DISTANCE_LOSS}, "
+        f"DISTANCE_LOSS_WEIGHT={DISTANCE_LOSS_WEIGHT}, "
+        f"DISTANCE_LOSS_TAU_KM={DISTANCE_LOSS_TAU_KM}"
+    )
+    print(
         "LR config: "
         f"USE_ONE_CYCLE_LR={USE_ONE_CYCLE_LR}, "
         f"ONE_CYCLE_PCT_START={ONE_CYCLE_PCT_START}"
@@ -355,13 +454,18 @@ def main():
             "Adjust sectoring/filtering and rebuild the manifest."
         )
 
-    if USE_CLASS_WEIGHTS:
-        criterion = nn.CrossEntropyLoss(
-            weight=class_weights.to(device),
-            label_smoothing=LABEL_SMOOTHING,
-        )
-    else:
-        criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
+    loss_class_weights = class_weights.to(device) if USE_CLASS_WEIGHTS else None
+    loss_distance_matrix = None
+    if USE_DISTANCE_LOSS:
+        loss_distance_matrix = build_sector_distance_matrix_km(train_dataset.label_map).to(device)
+
+    criterion = DistanceAwareCrossEntropyLoss(
+        class_weights=loss_class_weights,
+        label_smoothing=LABEL_SMOOTHING,
+        distance_matrix_km=loss_distance_matrix,
+        distance_weight=DISTANCE_LOSS_WEIGHT if USE_DISTANCE_LOSS else 0.0,
+        distance_tau_km=DISTANCE_LOSS_TAU_KM,
+    )
 
     net = Net(num_classes, pretrained=True).to(device)
     print(f"Model backbone: {net.backbone_name}")

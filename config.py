@@ -139,6 +139,25 @@ LABEL_SMOOTHING = 0.00
 USE_WEIGHTED_SAMPLER = False
 
 
+# ==========================
+# Distance-Aware Loss (Optional)
+# ==========================
+
+# If True, train with: total_loss = cross_entropy +
+# DISTANCE_LOSS_WEIGHT * geographic_penalty.
+#
+# The geographic penalty uses sector-centroid distances and encourages the
+# model to assign more probability mass to geographically nearby sectors.
+USE_DISTANCE_LOSS = False
+
+# Weight for the geographic penalty term in the total loss.
+DISTANCE_LOSS_WEIGHT = 0.10
+
+# Temperature (in km) for converting expected distance into a bounded penalty:
+# penalty = 1 - exp(-expected_distance_km / DISTANCE_LOSS_TAU_KM)
+DISTANCE_LOSS_TAU_KM = 1500.0
+
+
 # =================
 # Smoke Test Setup
 # =================
