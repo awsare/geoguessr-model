@@ -19,6 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, WeightedRandomSampler
+from tqdm.auto import tqdm
 
 from config import (
     BACKBONE_LEARNING_RATE,
@@ -225,16 +226,15 @@ def run_training_epochs(
     epoch_offset=0,
     epoch_end_callback=None,
     scheduler=None,
+    training_bar=None,
 ):
     """Run one training phase for num_epochs."""
     for phase_epoch in range(num_epochs):
         epoch_number = epoch_offset + phase_epoch + 1
-        current_lrs = ", ".join(f"{group['lr']:.6g}" for group in optimizer.param_groups)
-        print(f"[epoch {epoch_number:02d}] lr={current_lrs}")
 
         net.train()
         running_loss = 0.0
-        for i, data in enumerate(trainloader, 0):
+        for i, data in enumerate(trainloader, 1):
             inputs, labels = data[0].to(device), data[1].to(device)
 
             optimizer.zero_grad()
@@ -246,15 +246,32 @@ def run_training_epochs(
                 scheduler.step()
 
             running_loss += loss.item()
-            if i % PRINT_EVERY == PRINT_EVERY - 1:
-                print(
-                    f"[{epoch_number}, {i + 1:5d}] "
-                    f"loss: {running_loss / PRINT_EVERY:.3f}"
-                )
+            if training_bar is not None:
+                training_bar.update(1)
+
+            if i % PRINT_EVERY == 0:
+                if training_bar is not None:
+                    current_lrs = ",".join(
+                        f"{group['lr']:.2e}" for group in optimizer.param_groups
+                    )
+                    training_bar.set_postfix(
+                        epoch=f"{epoch_number:02d}/{NUM_EPOCHS:02d}",
+                        avg_loss=f"{running_loss / PRINT_EVERY:.3f}",
+                        lr=current_lrs,
+                    )
                 running_loss = 0.0
 
+        callback_metrics = None
         if epoch_end_callback is not None:
-            epoch_end_callback(epoch_number)
+            callback_metrics = epoch_end_callback(epoch_number)
+
+        if training_bar is not None and callback_metrics is not None:
+            training_bar.set_postfix(
+                epoch=f"{epoch_number:02d}/{NUM_EPOCHS:02d}",
+                overall=f"{callback_metrics['overall']:.2f}%",
+                macro=f"{callback_metrics['macro']:.2f}%",
+                selected=f"{callback_metrics['score']:.2f}%",
+            )
 
 
 def train(net, trainloader, valloader, device, criterion, best_checkpoint_path, num_classes):
@@ -269,10 +286,14 @@ def train(net, trainloader, valloader, device, criterion, best_checkpoint_path, 
             f"Got: {BEST_CHECKPOINT_METRIC}"
         )
 
+    steps_per_epoch = len(trainloader)
+    if steps_per_epoch == 0:
+        raise RuntimeError("Train dataloader has zero batches; cannot run training.")
+
     def on_epoch_end(epoch_number):
         overall_acc, macro_acc = evaluate_accuracy(net, valloader, device, num_classes)
         score = overall_acc if BEST_CHECKPOINT_METRIC == "overall_accuracy" else macro_acc
-        print(
+        tqdm.write(
             f"[val] epoch {epoch_number:02d}: overall={overall_acc:.2f}% "
             f"macro={macro_acc:.2f}% | selection={BEST_CHECKPOINT_METRIC}={score:.2f}%"
         )
@@ -292,12 +313,20 @@ def train(net, trainloader, valloader, device, criterion, best_checkpoint_path, 
                 raise RuntimeError(
                     f"Failed to write best checkpoint to {best_checkpoint_path}: {exc}"
                 ) from exc
-            print(
+            tqdm.write(
                 f"[val] New best checkpoint at epoch {epoch_number:02d} "
                 f"saved to {best_checkpoint_path}"
             )
 
-    print(f"Phase 1/2: train classifier head for {head_epochs} epoch(s)")
+        return {"overall": overall_acc, "macro": macro_acc, "score": score}
+
+    tqdm.write(f"Phase 1/2: train classifier head for {head_epochs} epoch(s)")
+    training_bar = tqdm(
+        total=steps_per_epoch * NUM_EPOCHS,
+        desc="Training Progress",
+        unit="batch",
+        position=0,
+    )
     net.freeze_backbone()
     head_optimizer = optim.SGD(
         net.backbone.fc.parameters(),
@@ -307,9 +336,6 @@ def train(net, trainloader, valloader, device, criterion, best_checkpoint_path, 
     )
     head_scheduler = None
     if USE_ONE_CYCLE_LR:
-        steps_per_epoch = len(trainloader)
-        if steps_per_epoch == 0:
-            raise RuntimeError("Train dataloader has zero batches; cannot build OneCycleLR.")
         head_scheduler = optim.lr_scheduler.OneCycleLR(
             head_optimizer,
             max_lr=HEAD_LEARNING_RATE,
@@ -329,10 +355,11 @@ def train(net, trainloader, valloader, device, criterion, best_checkpoint_path, 
         head_epochs,
         epoch_end_callback=on_epoch_end,
         scheduler=head_scheduler,
+        training_bar=training_bar,
     )
 
     if finetune_epochs > 0:
-        print(f"Phase 2/2: fine-tune full network for {finetune_epochs} epoch(s)")
+        tqdm.write(f"Phase 2/2: fine-tune full network for {finetune_epochs} epoch(s)")
         net.unfreeze_backbone()
         backbone_params = [
             param
@@ -349,11 +376,6 @@ def train(net, trainloader, valloader, device, criterion, best_checkpoint_path, 
         )
         finetune_scheduler = None
         if USE_ONE_CYCLE_LR:
-            steps_per_epoch = len(trainloader)
-            if steps_per_epoch == 0:
-                raise RuntimeError(
-                    "Train dataloader has zero batches; cannot build OneCycleLR."
-                )
             finetune_scheduler = optim.lr_scheduler.OneCycleLR(
                 finetune_optimizer,
                 max_lr=[BACKBONE_LEARNING_RATE, FINETUNE_HEAD_LEARNING_RATE],
@@ -374,9 +396,11 @@ def train(net, trainloader, valloader, device, criterion, best_checkpoint_path, 
             epoch_offset=head_epochs,
             epoch_end_callback=on_epoch_end,
             scheduler=finetune_scheduler,
+            training_bar=training_bar,
         )
 
-    print("Finished Training")
+    training_bar.close()
+    tqdm.write("Finished Training")
     return best_state
 
 

@@ -12,6 +12,7 @@ from statistics import median
 import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from config import BATCH_SIZE, CHECKPOINT_PATH, MANIFEST_PATH, TRAIN_NUM_WORKERS
 from dataset import GeoLocateDataset
@@ -21,10 +22,16 @@ from train import get_device
 
 
 def evaluate_overall(net, testloader, device):
-    """Print overall accuracy of net on testloader."""
+    """Return overall accuracy (%) of net on testloader."""
     correct, total = 0, 0
     with torch.no_grad():
-        for data in testloader:
+        for data in tqdm(
+            testloader,
+            desc="Overall Accuracy",
+            unit="batch",
+            leave=False,
+            position=1,
+        ):
             images, labels = data[0].to(device), data[1].to(device)
             outputs = net(images)
             _, predicted = torch.max(outputs.data, 1)
@@ -33,17 +40,23 @@ def evaluate_overall(net, testloader, device):
 
     if total == 0:
         raise RuntimeError("Test split has zero samples; cannot compute accuracy.")
-    print(f"Accuracy on test images: {100 * correct / total:.1f} %")
+    return 100 * correct / total
 
 
 def evaluate_per_class(net, testloader, label_map, device):
-    """Print per-sector accuracy of net on testloader."""
+    """Return per-sector accuracies as sorted (sector, accuracy_pct) tuples."""
     idx_to_sector = {idx: sector for sector, idx in label_map.items()}
     correct_pred = {sector: 0 for sector in label_map}
     total_pred = {sector: 0 for sector in label_map}
 
     with torch.no_grad():
-        for data in testloader:
+        for data in tqdm(
+            testloader,
+            desc="Per-Class Accuracy",
+            unit="batch",
+            leave=False,
+            position=1,
+        ):
             images, labels = data[0].to(device), data[1].to(device)
             outputs = net(images)
             _, predictions = torch.max(outputs, 1)
@@ -53,19 +66,27 @@ def evaluate_per_class(net, testloader, label_map, device):
                     correct_pred[sector] += 1
                 total_pred[sector] += 1
 
+    results = []
     for sector, correct_count in sorted(correct_pred.items()):
         accuracy = 100 * correct_count / total_pred[sector] if total_pred[sector] else 0
-        print(f"Accuracy for {sector:26s}: {accuracy:.1f} %")
+        results.append((sector, accuracy))
+    return results
 
 
 def evaluate_confusion_matrix(net, testloader, label_map, device, output_path):
-    """Save a confusion-matrix image for model predictions on testloader."""
+    """Save a confusion-matrix image and return its output path."""
     num_classes = len(label_map)
     idx_to_sector = {idx: sector for sector, idx in label_map.items()}
     cm = torch.zeros((num_classes, num_classes), dtype=torch.long)
 
     with torch.no_grad():
-        for data in testloader:
+        for data in tqdm(
+            testloader,
+            desc="Confusion Matrix",
+            unit="batch",
+            leave=False,
+            position=1,
+        ):
             images, labels = data[0].to(device), data[1].to(device)
             outputs = net(images)
             _, predictions = torch.max(outputs, 1)
@@ -91,7 +112,7 @@ def evaluate_confusion_matrix(net, testloader, label_map, device, output_path):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
-    print(f"Saved confusion matrix to {output_path}")
+    return output_path
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -111,7 +132,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 
 def evaluate_geographic_distance(net, testloader, label_map, device):
-    """Print distance-aware metrics using sector-centroid great-circle error."""
+    """Return distance-aware metrics using sector-centroid great-circle error."""
     idx_to_sector = {idx: sector for sector, idx in label_map.items()}
     centroid_map = get_active_sector_centroids()
     missing = sorted(set(idx_to_sector.values()) - set(centroid_map))
@@ -124,13 +145,21 @@ def evaluate_geographic_distance(net, testloader, label_map, device):
 
     distances_km = []
     within_500 = 0
-    within_1000 = 0
     within_2000 = 0
+    within_3000 = 0
+    within_4000 = 0
+    within_5000 = 0
     weighted_sum = 0.0
     weighted_tau_km = 1500.0
 
     with torch.no_grad():
-        for data in testloader:
+        for data in tqdm(
+            testloader,
+            desc="Geographic Distance",
+            unit="batch",
+            leave=False,
+            position=1,
+        ):
             images, labels = data[0].to(device), data[1].to(device)
             outputs = net(images)
             _, predictions = torch.max(outputs, 1)
@@ -145,10 +174,14 @@ def evaluate_geographic_distance(net, testloader, label_map, device):
 
                 if distance_km <= 500:
                     within_500 += 1
-                if distance_km <= 1000:
-                    within_1000 += 1
                 if distance_km <= 2000:
                     within_2000 += 1
+                if distance_km <= 3000:
+                    within_3000 += 1
+                if distance_km <= 4000:
+                    within_4000 += 1
+                if distance_km <= 5000:
+                    within_5000 += 1
                 weighted_sum += math.exp(-distance_km / weighted_tau_km)
 
     if not distances_km:
@@ -159,16 +192,16 @@ def evaluate_geographic_distance(net, testloader, label_map, device):
     median_km = median(distances_km)
     weighted_score = weighted_sum / count
 
-    print("Geographic distance metrics (sector-centroid based):")
-    print(f"  Mean error (km):     {mean_km:.1f}")
-    print(f"  Median error (km):   {median_km:.1f}")
-    print(f"  Within 500 km:       {100.0 * within_500 / count:.2f}%")
-    print(f"  Within 1000 km:      {100.0 * within_1000 / count:.2f}%")
-    print(f"  Within 2000 km:      {100.0 * within_2000 / count:.2f}%")
-    print(
-        "  Distance score exp(-d/tau), tau=1500 km: "
-        f"{weighted_score:.4f}"
-    )
+    return {
+        "mean_km": mean_km,
+        "median_km": median_km,
+        "within_500_pct": 100.0 * within_500 / count,
+        "within_2000_pct": 100.0 * within_2000 / count,
+        "within_3000_pct": 100.0 * within_3000 / count,
+        "within_4000_pct": 100.0 * within_4000 / count,
+        "within_5000_pct": 100.0 * within_5000 / count,
+        "weighted_score": weighted_score,
+    }
 
 
 def load_checkpoint(checkpoint_path, num_classes, device):
@@ -221,20 +254,51 @@ def main():
     net = load_checkpoint(CHECKPOINT_PATH, len(test_dataset.label_map), device)
     print(f"Loaded model from {CHECKPOINT_PATH}")
 
-    evaluate_overall(net, testloader, device)
-    evaluate_per_class(net, testloader, test_dataset.label_map, device)
-    evaluate_geographic_distance(net, testloader, test_dataset.label_map, device)
+    evaluation_steps = tqdm(total=4, desc="Evaluation Progress", unit="stage", position=0)
+
+    overall_accuracy = evaluate_overall(net, testloader, device)
+    evaluation_steps.update(1)
+
+    per_class_results = evaluate_per_class(net, testloader, test_dataset.label_map, device)
+    evaluation_steps.update(1)
+
+    geo_metrics = evaluate_geographic_distance(net, testloader, test_dataset.label_map, device)
+    evaluation_steps.update(1)
+
     confusion_matrix_path = os.path.join(
         os.path.dirname(CHECKPOINT_PATH),
         "confusion_matrix.png",
     )
-    evaluate_confusion_matrix(
+    confusion_matrix_output = evaluate_confusion_matrix(
         net,
         testloader,
         test_dataset.label_map,
         device,
         confusion_matrix_path,
     )
+    evaluation_steps.update(1)
+    evaluation_steps.close()
+
+    print("\nEvaluation Summary")
+    print(f"Accuracy on test images: {overall_accuracy:.1f} %")
+
+    print("Per-class accuracy:")
+    for sector, accuracy in per_class_results:
+        print(f"Accuracy for {sector:26s}: {accuracy:.1f} %")
+
+    print("Geographic distance metrics (sector-centroid based):")
+    print(f"  Mean error (km):     {geo_metrics['mean_km']:.1f}")
+    print(f"  Median error (km):   {geo_metrics['median_km']:.1f}")
+    print(f"  Within 500 km:       {geo_metrics['within_500_pct']:.2f}%")
+    print(f"  Within 2000 km:      {geo_metrics['within_2000_pct']:.2f}%")
+    print(f"  Within 3000 km:      {geo_metrics['within_3000_pct']:.2f}%")
+    print(f"  Within 4000 km:      {geo_metrics['within_4000_pct']:.2f}%")
+    print(f"  Within 5000 km:      {geo_metrics['within_5000_pct']:.2f}%")
+    print(
+        "  Distance score exp(-d/tau), tau=1500 km: "
+        f"{geo_metrics['weighted_score']:.4f}"
+    )
+    print(f"Saved confusion matrix to {confusion_matrix_output}")
 
 
 if __name__ == "__main__":
