@@ -69,7 +69,7 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 
 # ResNet backbone variant used by model.py.
 # Supported values: "resnet18", "resnet34", "resnet50".
-BACKBONE_NAME = "resnet34"
+BACKBONE_NAME = "resnet50"
 
 
 # =========================
@@ -83,10 +83,10 @@ BATCH_SIZE = 32
 TRAIN_NUM_WORKERS = 4
 
 # Total training epochs across both warmup and fine-tuning phases.
-NUM_EPOCHS = 30
+NUM_EPOCHS = 40
 
 # Number of initial epochs that train only the classifier head.
-HEAD_WARMUP_EPOCHS = 6
+HEAD_WARMUP_EPOCHS = 5
 
 # Learning rate for classifier-head warmup phase.
 HEAD_LEARNING_RATE = 0.001
@@ -107,15 +107,15 @@ WEIGHT_DECAY = 1e-4
 PRINT_EVERY = 100
 
 # Enable OneCycleLR scheduling (applied separately per training phase).
-USE_ONE_CYCLE_LR = False
+USE_ONE_CYCLE_LR = True
 
 # OneCycleLR shape controls.
 # Fraction of total steps used to increase LR from initial_lr to max_lr.
-ONE_CYCLE_PCT_START = 0.3
+ONE_CYCLE_PCT_START = 0.25
 # initial_lr = max_lr / ONE_CYCLE_DIV_FACTOR
 ONE_CYCLE_DIV_FACTOR = 25.0
 # final_lr = initial_lr / ONE_CYCLE_FINAL_DIV_FACTOR
-ONE_CYCLE_FINAL_DIV_FACTOR = 10000.0
+ONE_CYCLE_FINAL_DIV_FACTOR = 1000.0
 
 # Validation metric used to select the best checkpoint.
 # Supported values: "overall_accuracy", "macro_accuracy".
@@ -148,10 +148,10 @@ USE_WEIGHTED_SAMPLER = False
 #
 # The geographic penalty uses sector-centroid distances and encourages the
 # model to assign more probability mass to geographically nearby sectors.
-USE_DISTANCE_LOSS = False
+USE_DISTANCE_LOSS = True
 
 # Weight for the geographic penalty term in the total loss.
-DISTANCE_LOSS_WEIGHT = 0.10
+DISTANCE_LOSS_WEIGHT = 0.1
 
 # Temperature (in km) for converting expected distance into a bounded penalty:
 # penalty = 1 - exp(-expected_distance_km / DISTANCE_LOSS_TAU_KM)
